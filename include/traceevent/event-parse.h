@@ -82,43 +82,13 @@ struct tep_plugin_option {
  *
  *   int TEP_PLUGIN_UNLOADER(struct tep_handle *tep)
  *
- * TEP_PLUGIN_OPTIONS:  (optional)
- *   Plugin options that can be set before loading
- *
- *   struct tep_plugin_option TEP_PLUGIN_OPTIONS[] = {
- *	{
- *		.name = "option-name",
- *		.plugin_alias = "override-file-name", (optional)
- *		.description = "description of option to show users",
- *	},
- *	{
- *		.name = NULL,
- *	},
- *   };
- *
- *   Array must end with .name = NULL;
- *
- *
- *   .plugin_alias is used to give a shorter name to access
- *   the vairable. Useful if a plugin handles more than one event.
- *
- *   If .value is not set, then it is considered a boolean and only
- *   .set will be processed. If .value is defined, then it is considered
- *   a string option and .set will be ignored.
- *
- * TEP_PLUGIN_ALIAS: (optional)
- *   The name to use for finding options (uses filename if not defined)
  */
 #define TEP_PLUGIN_LOADER tep_plugin_loader
 #define TEP_PLUGIN_UNLOADER tep_plugin_unloader
-#define TEP_PLUGIN_OPTIONS tep_plugin_options
-#define TEP_PLUGIN_ALIAS tep_plugin_alias
 #define _MAKE_STR(x)	#x
 #define MAKE_STR(x)	_MAKE_STR(x)
 #define TEP_PLUGIN_LOADER_NAME MAKE_STR(TEP_PLUGIN_LOADER)
 #define TEP_PLUGIN_UNLOADER_NAME MAKE_STR(TEP_PLUGIN_UNLOADER)
-#define TEP_PLUGIN_OPTIONS_NAME MAKE_STR(TEP_PLUGIN_OPTIONS)
-#define TEP_PLUGIN_ALIAS_NAME MAKE_STR(TEP_PLUGIN_ALIAS)
 
 enum tep_format_flags {
 	TEP_FIELD_IS_ARRAY	= 1,
@@ -332,6 +302,8 @@ enum tep_flag {
 	TEP_NSEC_OUTPUT		= 1,	/* output in NSECS */
 	TEP_DISABLE_SYS_PLUGINS	= 1 << 1,
 	TEP_DISABLE_PLUGINS	= 1 << 2,
+	TEP_NO_PARSING_WARNINGS	= 1 << 3, /* Disable warnings while parsing
+					     event's format strings */
 };
 
 #define TEP_ERRORS 							      \
@@ -436,7 +408,7 @@ static inline int tep_is_bigendian(void)
 /* taken from kernel/trace/trace.h */
 enum trace_flag_type {
 	TRACE_FLAG_IRQS_OFF		= 0x01,
-	TRACE_FLAG_IRQS_NOSUPPORT	= 0x02,
+	TRACE_FLAG_NEED_RESCHED_LAZY	= 0x02,
 	TRACE_FLAG_NEED_RESCHED		= 0x04,
 	TRACE_FLAG_HARDIRQ		= 0x08,
 	TRACE_FLAG_SOFTIRQ		= 0x10,
