@@ -11,6 +11,7 @@ OBJS += parse-filter.o
 OBJS += parse-utils.o
 OBJS += tep_strerror.o
 OBJS += trace-seq.o
+OBJS += trace-btf.o
 
 OBJS := $(OBJS:%.o=$(bdir)/%.o)
 DEPS := $(OBJS:$(bdir)/%.o=$(bdir)/.%.d)
@@ -18,7 +19,10 @@ DEPS := $(OBJS:$(bdir)/%.o=$(bdir)/.%.d)
 $(bdir)/%.o: %.c
 	$(Q)$(call do_fpic_compile)
 
-$(LIBTRACEEVENT_STATIC): $(OBJS)
+$(LIBTRACEEVENT_STATIC): $(bdir)/.tmp.libtraceevent.a $(LIBTRACEEVENT_SHARED)
+	$(Q)objcopy $(call redefine_local,${LIBTRACEEVENT_SHARED}) $< $@
+
+$(bdir)/.tmp.libtraceevent.a: $(OBJS)
 	$(Q)$(call do_build_static_lib)
 
 $(LIBTRACEEVENT_SHARED): $(OBJS)
@@ -44,7 +48,8 @@ $(OBJS): | $(bdir)
 $(DEPS): | $(bdir)
 
 clean:
-	$(Q)$(call do_clean,$(OBJS) $(DEPS))
+	$(Q)$(call do_clean,$(OBJS) $(DEPS) $(bdir)/libtraceevent.o \
+	                    $(bdir)/.tmp.libtraceevent.a)
 
 dep_includes := $(wildcard $(DEPS))
 
