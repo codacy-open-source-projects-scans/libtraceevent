@@ -428,6 +428,8 @@ int tep_register_comm(struct tep_handle *tep, const char *comm, int pid);
 int tep_override_comm(struct tep_handle *tep, const char *comm, int pid);
 int tep_parse_saved_cmdlines(struct tep_handle *tep, const char *buf);
 int tep_parse_kallsyms(struct tep_handle *tep, const char *kallsyms);
+int tep_parse_last_boot_info(struct tep_handle *tep, const char *lbi);
+int tep_load_modules(struct tep_handle *tep, char *modules, size_t size);
 int tep_register_function(struct tep_handle *tep, char *name,
 			  unsigned long long addr, char *mod);
 int tep_parse_printk_formats(struct tep_handle *tep, const char *buf);
@@ -589,6 +591,7 @@ struct kbuffer *tep_kbuffer(struct tep_handle *tep);
 
 /* BTF */
 int tep_load_btf(struct tep_handle *tep, void *raw_data, size_t data_size);
+int tep_btf_list_args(struct tep_handle *tep, struct trace_seq *s, const char *func);
 int tep_btf_print_args(struct tep_handle *tep, struct trace_seq *s, void *args,
 		       int nmem, int size, const char *func);
 

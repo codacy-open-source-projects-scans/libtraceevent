@@ -55,6 +55,8 @@ Meta data parsing:
 	int *tep_parse_saved_cmdlines*(struct tep_handle pass:[*]_tep_, const char pass:[*]_buf_);
 	int *tep_parse_printk_formats*(struct tep_handle pass:[*]_tep_, const char pass:[*]_buf_);
 	int *tep_parse_kallsyms*(struct tep_handle pass:[*]_tep_, const char pass:[*]_buf_);
+	int *tep_parse_last_boot_info*(struct tep_handle pass:[*]_tep_, const char pass:[*]_lbi_);
+	int *tep_load_modules*(struct tep_handle pass:[*]_tep_, char pass:[*]_modules_, size_t _size_);
 
 Plugins management:
 	struct tep_plugin_list pass:[*]*tep_load_plugins*(struct tep_handle pass:[*]_tep_);
@@ -170,6 +172,7 @@ BTF parsing:
 	int *tep_load_btf*(struct tep_handle pass:[*]_tep_, void pass:[*]_raw_data_, size_t _data_size_);
 	int *tep_btf_print_args*(struct tep_handle pass:[*]_tep_, struct trace_seq pass:[*]_s_, void pass:[*]_args_,
 		       int nmem, int size, const char pass:[*]_func_);
+	int *tep_btf_list_args*(struct tep_handle pass:[*]_tep_, struct trace_seq pass:[*]_s_, const char pass:[*]_func_);
 
 Trace sequences:
 *#include <trace-seq.h>*

@@ -99,6 +99,11 @@ struct tep_function_handler {
 	int				nr_args;
 };
 
+struct tep_mod_addr {
+	unsigned long long		addr;
+	char				*mod;
+};
+
 static unsigned long long
 process_defined_func(struct trace_seq *s, void *data, int size,
 		     struct tep_event *event, struct tep_print_arg *arg);
@@ -529,11 +534,51 @@ static int func_map_init(struct tep_handle *tep)
 	return 0;
 }
 
+static int cmp_mod_addrs(const void *A, const void *B)
+{
+	const struct tep_mod_addr *a = A;
+	const struct tep_mod_addr *b = B;
+
+	if (a->addr < b->addr)
+		return -1;
+
+	return b[1].addr && a->addr >= b[1].addr;
+}
+
+static int cmp_mods(const void *A, const void *B)
+{
+	const struct tep_mod_addr *a = A;
+	const struct tep_mod_addr *b = B;
+
+	return strcmp(a->mod, b->mod);
+}
+
+static unsigned long long mod_addr_offset(struct tep_handle *tep, unsigned long long addr)
+{
+	struct tep_mod_addr key = { .addr = addr };
+	struct tep_mod_addr *mod;
+
+	if (!tep->mod_addr || addr < tep->mod_addr)
+		return tep->func_offset;
+
+	mod = bsearch(&key, tep->mod_addrs, tep->nr_mod_addrs,
+		      sizeof(key), cmp_mod_addrs);
+	if (!mod)
+		return 0;
+
+	mod = bsearch(mod, tep->proc_mods, tep->nr_proc_mods,
+		      sizeof(key), cmp_mods);
+
+	return mod ? mod->addr : 0;
+}
+
 static struct func_map *
 __find_func(struct tep_handle *tep, unsigned long long addr)
 {
 	struct func_map *func;
 	struct func_map key;
+
+	addr += mod_addr_offset(tep, addr);
 
 	if (!tep->func_map)
 		func_map_init(tep);
@@ -610,6 +655,15 @@ find_func(struct tep_handle *tep, unsigned long long addr)
 	return map;
 }
 
+static unsigned long long addr_offset(struct tep_handle *tep, struct func_map *map)
+{
+	/* We don't handle mods yet */
+	if (!tep->mod_addrs || map->mod)
+		return map->addr;
+
+	return map->addr - mod_addr_offset(tep, map->addr);
+}
+
 /**
  * tep_find_function_info - find a function by a given address
  * @tep: a handle to the trace event parser context
@@ -636,7 +690,7 @@ int tep_find_function_info(struct tep_handle *tep, unsigned long long addr,
 	if (name)
 		*name = map->func;
 	if (start)
-		*start = map->addr;
+		*start = addr_offset(tep, map);
 	if (size) {
 		if (!tep->func_resolver)
 			*size = map[1].addr - map->addr;
@@ -688,6 +742,23 @@ tep_find_function_address(struct tep_handle *tep, unsigned long long addr)
 	return map->addr;
 }
 
+static void set_func_offset(struct tep_handle *tep)
+{
+	unsigned long long old_addr = 0;
+	int a;
+
+	for (a = 0; a < tep->nr_mod_addrs; a++) {
+		if (strncmp(tep->mod_addrs[a].mod, "[kernel]", 8) == 0) {
+			old_addr = tep->mod_addrs[a].addr;
+			break;
+		}
+	}
+	if (!old_addr)
+		return;
+
+	tep->func_offset = tep->_text_addr - old_addr;
+}
+
 /**
  * tep_register_function - register a function with a given address
  * @tep: a handle to the trace event parser context
@@ -719,6 +790,11 @@ int tep_register_function(struct tep_handle *tep, char *func,
 		item->mod = NULL;
 	item->addr = addr;
 
+	if (!mod && strcmp(func, "_text") == 0) {
+		tep->_text_addr = addr;
+		set_func_offset(tep);
+	}
+
 	tep->funclist = item;
 	tep->func_count++;
 
@@ -731,6 +807,214 @@ out_free:
 	free(item);
 	errno = ENOMEM;
 	return -1;
+}
+
+static int cmp_addrs(const void *A, const void *B)
+{
+	const struct tep_mod_addr *a = A;
+	const struct tep_mod_addr *b = B;
+
+	if (a->addr < b->addr)
+		return -1;
+
+	return a->addr > b->addr;
+}
+
+static void update_mod(struct tep_handle *tep, const struct tep_mod_addr *key)
+{
+	struct tep_mod_addr *addr;
+
+	addr = bsearch(key, tep->proc_mods, tep->nr_proc_mods, sizeof(*addr), cmp_mods);
+	if (!addr)
+		return;
+
+	addr->addr -= key->addr;
+}
+
+static void set_func_mods(struct tep_handle *tep)
+{
+	int a;
+
+	if (!tep->proc_mods || !tep->mod_addrs)
+		return;
+
+	for (a = 0; a < tep->nr_mod_addrs; a++) {
+		if (strncmp(tep->mod_addrs[a].mod, "[kernel]", 8) == 0)
+			continue;
+
+		if (!tep->mod_addr)
+			tep->mod_addr = tep->mod_addrs[a].addr;
+
+		update_mod(tep, &tep->mod_addrs[a]);
+	}
+}
+
+/**
+ * tep_parse_last_boot_info - read the last_boot_info file
+ * @tep: a handle to the trace event parser
+ * @lbi: A string that holds the last_boot_info file contents
+ *
+ * The persistent ring buffer instance has a last_boot_info file that holds
+ * the offsets of the kernel as well as modules of the boot that
+ * the persistent instanse recorded.
+ *
+ * By passing in the contents of this file, it will be used to modify
+ * the kallsyms addresses used for finding functions.
+ *
+ * Returns 0 on success, and -1 on error.
+ */
+int tep_parse_last_boot_info(struct tep_handle *tep, const char *lbi)
+{
+	struct tep_mod_addr *addrs = NULL;
+	unsigned long long addr;
+	char *copy;
+	char *line;
+	char *next = NULL;
+	char *mod;
+	int lines;
+	char *p;
+	int a;
+	int ret = -1;
+
+	if (!lbi)
+		return -1;
+
+	/* The current buffer has no offset changes */
+	if (strncmp(lbi, "# Current", 9) == 0)
+		return 0;
+
+	copy = strdup(lbi);
+	if (!copy)
+		return -1;
+
+	for (p = copy, lines = 0; p; p = strchr(p + 1, '\n'), lines++)
+		;
+
+	addrs = calloc(lines + 1, sizeof(*addrs));
+	if (!addrs)
+		goto out;
+
+	line = strtok_r(copy, "\n", &next);
+	for (a = 0; line; a++) {
+		int n;
+
+		mod = NULL;
+		errno = 0;
+		n = sscanf(line, "%16llx %ms", &addr, &mod);
+		if (errno)
+			goto out;
+
+		if (n != 2) {
+			tep_warning("Failed to parse last_boot_info");
+			goto out;
+		}
+
+		addrs[a].mod = mod;
+		addrs[a].addr = addr;
+
+		line = strtok_r(NULL, "\n", &next);
+	}
+	ret = 0;
+
+	qsort(addrs, a, sizeof(*addrs), cmp_addrs);
+
+	tep->nr_mod_addrs = a;
+	tep->mod_addrs = addrs;
+
+	/* Allow to free on error handling too */
+	addrs = NULL;
+
+	if (tep->_text_addr)
+		set_func_offset(tep);
+
+	if (tep->proc_mods)
+		set_func_mods(tep);
+
+ out:
+	free(copy);
+	free(addrs);
+	return ret;
+}
+
+/**
+ * tep_load_modules - Load module information into a tep handle
+ * @tep: The tep handle to load the module info into
+ * @modules: A string containing the content of /proc/modules
+ * @size: The size of the modules string
+ *
+ * Saves the locations of where the modules are loaded. This is useful
+ * with tep_parse_last_boot_info() as it will be used to calculate the
+ * offsets between the current module locations and the one from the
+ * previous boot.
+ *
+ * Returns: 0 on success and -1 on failure.
+ */
+int tep_load_modules(struct tep_handle *tep, char *modules, size_t size)
+{
+	struct tep_mod_addr *mods = NULL;
+	unsigned long long addr;
+	char *copy;
+	char *line;
+	char *next = NULL;
+	char *mod;
+	int lines;
+	char *p;
+	int a;
+	int ret = -1;
+
+	if (!modules)
+		return -1;
+
+	copy = malloc(size + 1);
+	if (!copy)
+		return -1;
+	strncpy(copy, modules, size);
+	copy[size] = '\0';
+
+	for (p = copy, lines = 0; p; p = strchr(p + 1, '\n'), lines++)
+		;
+
+	mods = calloc(lines, sizeof(*mods));
+	if (!mods)
+		goto out;
+
+	line = strtok_r(copy, "\n", &next);
+	for (a = 0; line; a++) {
+		int n;
+
+		mod = NULL;
+		errno = 0;
+		n = sscanf(line, "%ms %*s %*s %*s %*s %18llx", &mod, &addr);
+		if (errno)
+			goto out;
+
+		if (n != 2) {
+			tep_warning("Failed to parse /proc/modules");
+			goto out;
+		}
+
+		mods[a].mod = mod;
+		mods[a].addr = addr;
+
+		line = strtok_r(NULL, "\n", &next);
+	}
+	ret = 0;
+
+	qsort(mods, a, sizeof(*mods), cmp_mods);
+
+	tep->nr_proc_mods = a;
+	tep->proc_mods = mods;
+
+	/* Allow to free on error handling too */
+	mods = NULL;
+
+	if (tep->mod_addrs)
+		set_func_mods(tep);
+
+ out:
+	free(copy);
+	free(mods);
+	return ret;
 }
 
 /**
@@ -797,7 +1081,6 @@ int tep_parse_kallsyms(struct tep_handle *tep, const char *kallsyms)
 
 		line = strtok_r(NULL, "\n", &next);
 	}
-	free(line);
 	ret = 0;
  out:
 	free(copy);
@@ -8768,6 +9051,9 @@ void tep_free(struct tep_handle *tep)
 		free(funclist);
 		funclist = funcnext;
 	}
+
+	free(tep->mod_addrs);
+	free(tep->proc_mods);
 
 	while (tep->func_handlers) {
 		func_handler = tep->func_handlers;
